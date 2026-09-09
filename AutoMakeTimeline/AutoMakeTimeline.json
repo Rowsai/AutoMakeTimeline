@@ -1,0 +1,12 @@
+{
+  "Author": "Auto Make Timeline",
+  "Name": "Auto Make Timeline",
+  "InternalName": "AutoMakeTimeline",
+  "AssemblyVersion": "1.0.0.2",
+  "Description": "エネミーの攻撃結果とパーティの被ダメージ・ステータスを戦闘単位で記録し、CSVに保存します。/amt で画面を表示。",
+  "Punchline": "戦闘を記録してタイムラインを自動作成",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "Tags": ["combat", "timeline", "csv"],
+  "LoadPriority": 0
+}
