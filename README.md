@@ -122,34 +122,6 @@ ImGuiの表ではセル自体を縦結合しておらず、見本と完全なピ
 大きな戦闘記録は可視行だけ描画します。
 アイコンは `images/icon.png` に設定しています。
 
-## ソースからビルド
-
-必要環境: Windows x64、.NET SDK 10、Dalamud API15の開発用DLL。
-
-```powershell
-dotnet build ./AutoMakeTimeline/AutoMakeTimeline.csproj -c Release
-dotnet run --project ./Tests/Tests.csproj -c Release
-pwsh -File ./build.ps1
-```
-
-Dalamud.NET.Sdk 15.0.0が標準のDalamudインストール場所を参照します。
-別配置のライブラリはSDKがサポートする `DalamudLibPath` を指定します。
-`build.ps1` は検証後、`artifacts/latest.zip` と `artifacts/source.zip` を作成します。
-DalamudやFFXIVClientStructs等のホスト提供DLLは配布ZIPに同梱しません。
-
-## 正式配布前の実機確認
-
-未実施の項目です。実戦環境で確認してください。
-
-1. API15でロード・アンロードが成功し、`/amt` とアイコンが表示される。
-2. ソロの通常攻撃、8人への全体攻撃、複数ヒットで、ゲームの表示と数値・対象・Noを比較する。
-3. 10万以上の被ダメージ、ブロック・無敵で数値を比較する。
-4. 攻撃直前のステータス付与・消失時に、スナップショットを比較する。
-5. 全滅・再挑戦・クリア・エリア移動・ログアウト・`/amt off` で戦闘が区切られる。
-6. 再起動後の履歴とCSV再出力、出力先の書き込み拒否、長時間戦闘を確認する。
-7. ゲーム更新後、フックが解決するだけでなく実際に正しい攻撃結果を取得できることを確認する。
-8. 真成4のアースシェイカー・床の継続ダメージで、実際の被ダメージと記録値を比較する。反射・反撃が自分と敵のどちらに加算されるか確認する。
-
 ## 技術資料
 
 - [Dalamud API15](https://dalamud.dev/versions/v15/)
