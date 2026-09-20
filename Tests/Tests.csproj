@@ -7,5 +7,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../AutoMakeTimeline/Models.cs" Link="Models.cs" />
+    <Compile Include="../AutoMakeTimeline/DamageAnalysis.cs" Link="DamageAnalysis.cs" />
+    <Compile Include="../AutoMakeTimeline/DefenseStatusIds.cs" Link="DefenseStatusIds.cs" />
+    <Compile Include="../AutoMakeTimeline/IntegrationModels.cs" Link="IntegrationModels.cs" />
+    <Compile Include="../AutoMakeTimeline/DotStatusIds.cs" Link="DotStatusIds.cs" />
+    <Compile Include="../AutoMakeTimeline/AbilityDescriptions.cs" Link="AbilityDescriptions.cs" />
   </ItemGroup>
 </Project>

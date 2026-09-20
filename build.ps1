@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts'))
+﻿param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts'))
 $ErrorActionPreference = 'Stop'
 dotnet build (Join-Path $PSScriptRoot 'AutoMakeTimeline/AutoMakeTimeline.csproj') -c Release
 if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }

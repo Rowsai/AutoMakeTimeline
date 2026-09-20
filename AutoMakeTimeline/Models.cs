@@ -5,11 +5,81 @@ using System.Runtime.InteropServices;
 
 namespace AutoMakeTimeline;
 
-public sealed record Hit(string Job, long? Damage, string Statuses, uint TargetId = 0);
+public enum CaptureMode { Normal, Replay }
+public static class CapturePolicy
+{
+    public static bool Allows(CaptureMode mode, bool replayActive, bool paused) =>
+        mode == CaptureMode.Replay ? replayActive && !paused : !replayActive;
+}
+public sealed class ReplayCursor
+{
+    private double? position;
+    private double wall;
+    public bool Observe(double seconds, double wallSeconds, double speed)
+    {
+        var seek = position.HasValue && (seconds < position.Value - .05 ||
+            seconds - position.Value > Math.Max(2, Math.Max(0, wallSeconds - wall) * Math.Max(1, speed) + 2));
+        position = seconds; wall = wallSeconds;
+        return seek;
+    }
+    public void Reset() { position = null; wall = 0; }
+}
+
+public sealed record StatusInfo(uint Id, string Name, uint Icon, byte Category, bool IsCompany = false,
+    bool Defensive = false, bool Barrier = false, bool AltersDamage = false,
+    decimal? ReductionPhysical = null, decimal? ReductionMagical = null, string? ReductionSource = null, uint ReductionActionId = 0);
+public sealed record Hit(string Job, long? Damage, string Statuses, uint TargetId = 0, List<StatusInfo>? Effects = null,
+    uint? HpBefore = null, uint? MaxHp = null, byte? ShieldPercent = null, uint? RemainingHp = null,
+    byte? ShieldAfter = null, byte DamageType = 0, bool SpecialDamage = false, long CaptureTick = 0,
+    long? BarrierTotal = null, string BarrierSource = "未取得（旧履歴または未連携）")
+{
+    public string Buffs => Effects == null ? "取得不可" : string.Join(",", Effects.Where(s => s.Category == 1 && DefenseRules.IsDefensive(s)).Select(s => DefenseRules.StatusLabel(s, this)));
+    public string Debuffs => Effects == null ? "" : string.Join(",", Effects.Where(s => s.Category == 2).Select(s => s.Name));
+    public bool Fatal => RemainingHp == 0 && HpBefore > 0 && Damage > 0;
+    public long? BarrierEstimate => MaxHp.HasValue && ShieldPercent.HasValue ? (long)MaxHp.Value * ShieldPercent.Value / 100 : null;
+}
+public sealed class StatusCatalog
+{
+    private readonly Dictionary<uint, StatusInfo> byId;
+    private readonly Dictionary<string, StatusInfo> byName;
+    private readonly HashSet<uint> excluded;
+    public HashSet<string> ExcludedNames { get; }
+    public StatusCatalog(IEnumerable<StatusInfo> source)
+    {
+        var all = source.ToList();
+        byId = all.ToDictionary(s => s.Id);
+        // Squadron/consumable versions share the FC icon but lack IsFcBuff.
+        var companyIcons = all.Where(s => s.IsCompany && s.Icon != 0).Select(s => s.Icon).ToHashSet();
+        excluded = all.Where(s => !RecordingRules.IncludeStatus(s.Id, s.IsCompany) ||
+            (s.Category == 1 && companyIcons.Contains(s.Icon))).Select(s => s.Id).ToHashSet();
+        ExcludedNames = all.Where(s => excluded.Contains(s.Id)).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+        byName = all.Where(s => !string.IsNullOrEmpty(s.Name)).GroupBy(s => s.Name).ToDictionary(g => g.Key,
+            g => g.Select(s => s.Category).Distinct().Count() == 1 ? g.First() : new StatusInfo(0, g.Key, 0, 0), StringComparer.Ordinal);
+    }
+    public Hit FromIds(string job, long? damage, uint target, IEnumerable<uint> ids) => Apply(
+        new(job, damage, "", target), ids.Where(id => id != 0 && id != 48 && !excluded.Contains(id))
+            .Select(id => byId.GetValueOrDefault(id) ?? new StatusInfo(id, $"Status#{id}", 0, 0)));
+    public Hit Normalize(Hit hit)
+    {
+        var effects = hit.Effects ?? hit.Statuses.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(name => byName.GetValueOrDefault(name) ?? new StatusInfo(0, name, 0, 0)).ToList();
+        return Apply(hit, effects.Where(s => s.Id != 48 && (s.Id == 0 || !excluded.Contains(s.Id)) && !ExcludedNames.Contains(s.Name))
+            .Select(s => byId.GetValueOrDefault(s.Id) is { } known && s.Id != 0 ?
+                s.ReductionSource != null ? known with { ReductionPhysical = s.ReductionPhysical, ReductionMagical = s.ReductionMagical,
+                    ReductionSource = s.ReductionSource, ReductionActionId = s.ReductionActionId } : known : s));
+    }
+    private static Hit Apply(Hit hit, IEnumerable<StatusInfo> effects)
+    {
+        var list = effects.ToList();
+        return hit with { Effects = list, Statuses = string.Join(",", list.Select(s => s.Name)) };
+    }
+}
 public sealed record TimelineRow(int No, double Seconds, string Enemy, string Action, Hit Hit,
-    uint ActionId = 0, uint SourceId = 0, uint Sequence = 0, string Origin = "ActionEffect");
+    uint ActionId = 0, uint SourceId = 0, uint Sequence = 0, string Origin = "ActionEffect", List<StatusInfo>? EnemyEffects = null);
 public static class RecordingRules
 {
+    public static bool IsPetAction(uint ownerId, byte battleNpcKind, ISet<uint> partyIds) =>
+        battleNpcKind is 2 or 3 || (ownerId != 0 && ownerId != 0xE0000000 && partyIds.Contains(ownerId));
     public static string ActionName(uint id, uint category, string? name) =>
         category == 1 || id == 7 ? "攻撃（AA)" : string.IsNullOrEmpty(name) ? $"Action#{id}" : name;
     public static bool IncludeStatus(uint id, bool isFcBuff) => id != 0 && id != 48 && !isFcBuff;
@@ -35,6 +105,8 @@ public sealed class AttackGrouper
 }
 public sealed class Encounter
 {
+    public CaptureMode Mode { get; set; }
+    public double ReplayStartSeconds { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Content { get; set; } = "不明";
     public DateTimeOffset Start { get; set; }
@@ -47,7 +119,7 @@ public sealed class Encounter
 
 public static class Csv
 {
-    public const string Header = "No,時間,エネミー名称,攻撃名称,被ダメージ,被ダメージ対象のジョブ,バフ・デバフステータス情報";
+    public const string Header = "No,時間,エネミー名称,攻撃名称,被ダメージ,被ダメージ対象のジョブ,バフ情報,デバフ情報,エネミーバフ情報,エネミーデバフ情報,残りHP,致死,バリア合計,想定ダメージ,算出情報,軽減%,軽減情報,バリア情報";
     public static string Time(double seconds) => $"{(long)Math.Max(0, seconds) / 60:00}:{(long)Math.Max(0, seconds) % 60:00}";
     // Neutralize spreadsheet formulas without changing ordinary game names.
     public static string Quote(string s)
@@ -58,7 +130,13 @@ public static class Csv
     public static string Line(TimelineRow r) => string.Join(",", new[]
     {
         r.No.ToString(CultureInfo.InvariantCulture), Time(r.Seconds), r.Enemy, r.Action,
-        r.Hit.Damage?.ToString("N0", CultureInfo.InvariantCulture) ?? "", r.Hit.Job, r.Hit.Statuses,
+        r.Hit.Damage?.ToString("N0", CultureInfo.InvariantCulture) ?? "", r.Hit.Job, r.Hit.Buffs, r.Hit.Debuffs,
+        DefenseRules.EnemyText(r, false), DefenseRules.EnemyText(r, true),
+        r.Hit.RemainingHp?.ToString(CultureInfo.InvariantCulture) ?? "取得不可",
+        r.Hit.RemainingHp.HasValue ? (r.Hit.Fatal ? "致死" : "") : "未確認",
+        r.Hit.BarrierTotal?.ToString(CultureInfo.InvariantCulture) ?? "取得不可",
+        DamageEstimate.For(r).Display, DamageEstimate.For(r).Reason,
+        MitigationSummary.For(r).Display, MitigationSummary.For(r).Reason, r.Hit.BarrierSource,
     }.Select(Quote));
     public static StreamWriter Open(string path)
     {
@@ -85,8 +163,19 @@ public static class Csv
         Directory.CreateDirectory(folder);
         var path = Unique(folder, FileName(e));
         using var writer = Open(path);
-        foreach (var r in e.Rows) writer.WriteLine(Line(r));
+        foreach (var r in TimelineOrder.Sort(e.Rows)) writer.WriteLine(Line(r));
         return path;
+    }
+    public static void Rewrite(Encounter e, string path)
+    {
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var output = Open(temp))
+                foreach (var row in TimelineOrder.Sort(e.Rows)) output.WriteLine(Line(row));
+            File.Move(temp, path, true);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 }
 
@@ -104,12 +193,12 @@ public static class DamageDecoder
     }
 }
 
-public sealed record RoutedDamage(uint Source, uint Target, long Amount, bool Redirected);
+public sealed record RoutedDamage(uint Source, uint Target, long Amount, bool Redirected, byte DamageType = 0, bool Special = false);
 public sealed class DamageBatch(ISet<uint> partyIds)
 {
     private readonly Dictionary<(uint Source, uint Target), RoutedDamage> entries = [];
     public IEnumerable<RoutedDamage> Entries => entries.Values;
-    public void Add(uint caster, uint listedTarget, byte type, byte param3, byte param4, ushort value)
+    public void Add(uint caster, uint listedTarget, byte type, byte param3, byte param4, ushort value, byte param1 = 0)
     {
         var amount = DamageDecoder.Decode(type, param3, param4, value);
         if (!amount.HasValue) return;
@@ -119,7 +208,9 @@ public sealed class DamageBatch(ISet<uint> partyIds)
         var key = (origin, recipient);
         var previous = entries.GetValueOrDefault(key);
         entries[key] = new(origin, recipient, (previous?.Amount ?? 0) + amount.Value,
-            (previous?.Redirected ?? false) || (param4 & 0xA0) != 0);
+            (previous?.Redirected ?? false) || (param4 & 0xA0) != 0,
+            previous != null && previous.DamageType != (param1 & 15) ? (byte)0 : (byte)(param1 & 15),
+            (previous?.Special ?? false) || type != 3 || (param4 & 0xB0) != 0);
     }
 }
 
